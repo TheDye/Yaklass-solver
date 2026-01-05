@@ -47,8 +47,8 @@ This bot is a sophisticated automation tool designed to help with online tests. 
 ### 2. Clone & Install
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/homework-solver-bot.git
-cd homework-solver-bot
+git clone https://github.com/TheDye/Yaklass_Solver_bot.git
+cd Yaklass_Solver_bot
 
 # Install dependencies
 pip install -r requirements.txt
