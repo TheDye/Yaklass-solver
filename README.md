@@ -1,7 +1,7 @@
 <div align="center">
 
 # 🧠 AI Homework Solver Bot
-### Automated Yaklass Solver
+### Automated Yaklass and Google Form Solver
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![Selenium](https://img.shields.io/badge/Selenium-Automation-43B02A?style=for-the-badge&logo=selenium&logoColor=white)](https://www.selenium.dev/)
