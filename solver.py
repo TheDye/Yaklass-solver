@@ -281,7 +281,586 @@ except Exception as e:
 def normalize_answer(text):
     return " ".join(text.lower().strip().split())
 
-# ==================== PLATFORM DETECTION ====================
+# ==================== PLATFORM DETECTION & CALIBRATION ====================
+
+def extract_question_structure():
+    """
+    PRECISION EXTRACTION: Finds exact question + options in one operation.
+    Algorithm:
+    1. Scan ALL divs for ones with text + input fields together
+    2. Score by self-containment (question text + options nearby)
+    3. Return the best match with all metadata needed
+    """
+    print(f"\n{Fore.CYAN}[🎯] EXTRACTING QUESTION STRUCTURE (PRECISION MODE)...")
+    
+    try:
+        all_divs = driver.find_elements(By.TAG_NAME, "div")
+        print(f"    Scanning {len(all_divs)} divs...")
+        
+        candidates = []
+        
+        # Find all divs that are complete question containers
+        for div in all_divs:
+            try:
+                if not div.is_displayed():
+                    continue
+                
+                # Get div content
+                div_text = div.text.strip()
+                if not div_text or len(div_text) < 15 or len(div_text) > 500:
+                    continue
+                
+                # Check for input elements INSIDE this div
+                radios = div.find_elements(By.CSS_SELECTOR, "input[type='radio']")
+                checkboxes = div.find_elements(By.CSS_SELECTOR, "input[type='checkbox']")
+                text_inputs = div.find_elements(By.CSS_SELECTOR, "input[type='text'], textarea")
+                selects = div.find_elements(By.CSS_SELECTOR, "select")
+                
+                total_inputs = len(radios) + len(checkboxes) + len(text_inputs) + len(selects)
+                
+                # Only consider divs with at least 1 input
+                if total_inputs == 0:
+                    continue
+                
+                # Calculate score (prefer divs with more inputs = more self-contained)
+                score = len(div_text) + (total_inputs * 20)
+                
+                candidates.append({
+                    "element": div,
+                    "text": div_text,
+                    "radios": radios,
+                    "checkboxes": checkboxes,
+                    "text_inputs": text_inputs,
+                    "selects": selects,
+                    "total_inputs": total_inputs,
+                    "score": score
+                })
+            except:
+                pass
+        
+        if not candidates:
+            print(f"    {Fore.RED}✗ No question containers found")
+            return None
+        
+        # Sort by score - highest score = most self-contained
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        best = candidates[0]
+        
+        print(f"    {Fore.GREEN}✓ Found best container (score: {best['score']})")
+        print(f"    Text: {best['text'][:100]}...")
+        print(f"    Inputs: {best['total_inputs']} field(s)")
+        
+        # Build result based on what type of input we found
+        result = {
+            "question_text": best["text"],
+            "question_element": best["element"],
+            "options": [],
+            "field_type": None,
+            "is_multiple_choice": False
+        }
+        
+        # EXTRACT OPTIONS based on field type
+        if len(best["radios"]) > 0:
+            result["field_type"] = "radio"
+            result["is_multiple_choice"] = True
+            print(f"    {Fore.GREEN}✓ Field: RADIO ({len(best['radios'])} options)")
+            
+            for radio in best["radios"]:
+                try:
+                    if not radio.is_displayed():
+                        continue
+                    
+                    label_text = _extract_option_label(radio)
+                    if label_text:
+                        result["options"].append({
+                            "text": label_text,
+                            "element": radio,
+                            "type": "radio"
+                        })
+                except:
+                    pass
+        
+        elif len(best["checkboxes"]) > 0:
+            result["field_type"] = "checkbox"
+            result["is_multiple_choice"] = True
+            print(f"    {Fore.GREEN}✓ Field: CHECKBOX ({len(best['checkboxes'])} options)")
+            
+            for checkbox in best["checkboxes"]:
+                try:
+                    if not checkbox.is_displayed():
+                        continue
+                    
+                    label_text = _extract_option_label(checkbox)
+                    if label_text:
+                        result["options"].append({
+                            "text": label_text,
+                            "element": checkbox,
+                            "type": "checkbox"
+                        })
+                except:
+                    pass
+        
+        elif len(best["selects"]) > 0:
+            result["field_type"] = "select"
+            print(f"    {Fore.GREEN}✓ Field: SELECT")
+            
+            select_elem = best["selects"][0]
+            try:
+                from selenium.webdriver.support.select import Select
+                select = Select(select_elem)
+                for option in select.options:
+                    opt_text = option.text.strip()
+                    if opt_text:
+                        result["options"].append({
+                            "text": opt_text,
+                            "element": option,
+                            "type": "select"
+                        })
+            except:
+                pass
+        
+        elif len(best["text_inputs"]) > 0:
+            result["field_type"] = "text"
+            print(f"    {Fore.GREEN}✓ Field: TEXT")
+            result["options"] = [{
+                "text": "text_input",
+                "element": best["text_inputs"][0],
+                "type": "text"
+            }]
+        
+        if result["options"]:
+            print(f"    {Fore.CYAN}    Found {len(result['options'])} option(s)")
+        
+        return result
+    
+    except Exception as e:
+        print(f"    {Fore.RED}✗ Error: {str(e)[:80]}")
+        error_log.append(f"Question extraction: {str(e)[:80]}")
+        return None
+
+def _extract_option_label(input_element):
+    """
+    Extract label text for a single input element (radio/checkbox).
+    Tries multiple strategies in order of reliability.
+    """
+    label_text = ""
+    
+    # Strategy 1: Parent label tag
+    try:
+        parent_label = input_element.find_element(By.XPATH, "ancestor::label[1]")
+        label_text = parent_label.text.strip()
+        if label_text:
+            return label_text
+    except:
+        pass
+    
+    # Strategy 2: aria-label attribute
+    label_text = input_element.get_attribute("aria-label") or ""
+    if label_text:
+        return label_text.strip()
+    
+    # Strategy 3: Following sibling span
+    try:
+        sibling = input_element.find_element(By.XPATH, "following-sibling::span[1]")
+        label_text = sibling.text.strip()
+        if label_text:
+            return label_text
+    except:
+        pass
+    
+    # Strategy 4: Parent div text (most likely to have unwanted text)
+    try:
+        parent = input_element.find_element(By.XPATH, "ancestor::div[1]")
+        label_text = parent.text.strip()
+        if label_text:
+            return label_text
+    except:
+        pass
+    
+    # Strategy 5: value attribute
+    label_text = input_element.get_attribute("value") or ""
+    if label_text:
+        return label_text.strip()
+    
+    return ""
+
+def match_answer_to_option(ai_answer, available_options):
+    """
+    BULLETPROOF MATCHING: Match AI answer to exact option with 4-strategy fallback.
+    """
+    print(f"\n{Fore.CYAN}[🎯] MATCHING ANSWER TO OPTIONS...")
+    print(f"    AI Answer: '{ai_answer}'")
+    print(f"    Options: {len(available_options)}")
+    
+    if not available_options:
+        return None
+    
+    # Normalize the AI answer once
+    ai_norm = normalize_answer(ai_answer)
+    
+    best_match = None
+    best_score = 0.0
+    
+    # Evaluate each option
+    for option in available_options:
+        opt_text = option["text"]
+        opt_norm = normalize_answer(opt_text)
+        
+        # Strategy 1: EXACT MATCH
+        if ai_norm == opt_norm:
+            print(f"    {Fore.GREEN}✓✓✓ EXACT MATCH: '{opt_text}'")
+            return {"option": option, "score": 1.0}
+        
+        # Strategy 2: SUBSTRING (AI answer is part of option text)
+        if ai_norm in opt_norm or opt_norm in ai_norm:
+            score = 0.95
+            print(f"    {Fore.GREEN}✓✓ Substring match: '{opt_text}' ({score:.0%})")
+            if score > best_score:
+                best_score = score
+                best_match = {"option": option, "score": score}
+            continue
+        
+        # Strategy 3: WORD OVERLAP (Jaccard similarity)
+        ai_words = set(ai_norm.split())
+        opt_words = set(opt_norm.split())
+        
+        if ai_words and opt_words:
+            overlap = len(ai_words & opt_words) / max(len(ai_words), len(opt_words))
+            
+            if overlap >= 0.6:
+                print(f"    {Fore.YELLOW}↳ Word overlap: '{opt_text}' ({overlap:.0%})")
+                if overlap > best_score:
+                    best_score = overlap
+                    best_match = {"option": option, "score": overlap}
+                continue
+        
+        # Strategy 4: FIRST WORD MATCH
+        ai_first = ai_norm.split()[0] if ai_norm else ""
+        opt_first = opt_norm.split()[0] if opt_norm else ""
+        
+        if ai_first and opt_first and ai_first == opt_first:
+            score = 0.5
+            print(f"    {Fore.YELLOW}↳ First word: '{opt_text}' ({score:.0%})")
+            if score > best_score:
+                best_score = score
+                best_match = {"option": option, "score": score}
+    
+    # Return best match if found
+    if best_match and best_score >= 0.5:
+        print(f"\n    {Fore.GREEN}[✓] MATCH SELECTED")
+        print(f"    Option: '{best_match['option']['text']}'")
+        print(f"    Confidence: {best_match['score']:.0%}")
+        return best_match
+    
+    # Fallback: No match found
+    print(f"\n    {Fore.RED}[!] No match found (best score: {best_score:.0%})")
+    return None
+
+def select_answer_option(matched_option):
+    """
+    RELIABLE SELECTION: Select the matched option with 4 fallback strategies.
+    """
+    print(f"\n{Fore.CYAN}[✓] SELECTING OPTION...")
+    
+    try:
+        option_elem = matched_option["option"]["element"]
+        field_type = matched_option["option"]["type"]
+        
+        if field_type in ["radio", "checkbox"]:
+            # Try 4 strategies in order of reliability
+            strategies = [
+                ("Direct click", lambda: option_elem.click()),
+                ("Parent label click", lambda: option_elem.find_element(By.XPATH, "ancestor::label[1]").click()),
+                ("Scroll + click", lambda: (driver.execute_script("arguments[0].scrollIntoView(true);", option_elem), time.sleep(0.3), option_elem.click())),
+                ("JavaScript click", lambda: driver.execute_script("arguments[0].click();", option_elem))
+            ]
+            
+            for strategy_name, strategy_func in strategies:
+                try:
+                    print(f"    Trying: {strategy_name}...")
+                    strategy_func()
+                    time.sleep(0.5)
+                    
+                    # Verify selection
+                    if option_elem.is_selected():
+                        print(f"    {Fore.GREEN}✓ Success!")
+                        return True
+                except Exception as e:
+                    print(f"    {Fore.YELLOW}  Failed: {str(e)[:40]}")
+                    continue
+        
+        elif field_type == "select":
+            try:
+                from selenium.webdriver.support.select import Select
+                select_elem = option_elem.find_element(By.XPATH, "ancestor::select[1]")
+                select = Select(select_elem)
+                select.select_by_value(option_elem.get_attribute("value"))
+                time.sleep(0.3)
+                print(f"    {Fore.GREEN}✓ Selected from dropdown")
+                return True
+            except Exception as e:
+                print(f"    {Fore.RED}✗ Dropdown failed: {str(e)[:40]}")
+        
+        elif field_type == "text":
+            try:
+                option_elem.click()
+                time.sleep(0.2)
+                print(f"    {Fore.GREEN}✓ Text field ready")
+                return True
+            except Exception as e:
+                print(f"    {Fore.RED}✗ Text field failed: {str(e)[:40]}")
+        
+        print(f"    {Fore.RED}✗ All strategies failed")
+        return False
+    
+    except Exception as e:
+        print(f"    {Fore.RED}[!] Error: {str(e)[:80]}")
+        error_log.append(f"Select error: {str(e)[:80]}")
+        return False
+
+def auto_calibrate_page():
+    """
+    Deprecated: Use extract_question_structure() instead.
+    This function is kept for backward compatibility but does nothing.
+    """
+    print(f"\n{Fore.YELLOW}[!] auto_calibrate_page() is deprecated. Using extract_question_structure() instead.")
+    return None
+
+def calibrate_google_forms():
+    """
+    Calibrate Google Forms page structure.
+    Analyzes the page to find questions, answer fields, and their types.
+    Returns calibration data for current page.
+    """
+    try:
+        calibration = {
+            "question_elements": [],
+            "answer_field_info": None,
+            "field_type": None,
+            "has_multiple_questions": False,
+            "page_structure": {}
+        }
+        
+        # Find all potential question containers
+        question_selectors = [
+            ("div[data-item-id]", "data-item-id"),
+            ("div[role='heading']", "role='heading'"),
+            ("div[class*='question']", "class*='question'"),
+            ("div[class*='item']", "class*='item'"),
+            ("div[class*='prompt']", "class*='prompt'"),
+        ]
+        
+        all_questions = []
+        for selector, desc in question_selectors:
+            try:
+                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                if elements:
+                    all_questions.extend([(elem, desc) for elem in elements if elem.is_displayed()])
+            except:
+                pass
+        
+        # Deduplicate and store
+        calibration["question_elements"] = list(set(all_questions)) if all_questions else []
+        
+        # Find answer field and determine type
+        text_field = find_google_forms_text_field()
+        if text_field:
+            calibration["answer_field_info"] = text_field
+            calibration["field_type"] = "text"
+            print(f"{Fore.CYAN}[+] Detected field type: TEXT INPUT")
+        else:
+            # Check for multiple choice
+            radio_field = find_google_forms_radio_buttons()
+            if radio_field:
+                calibration["answer_field_info"] = radio_field
+                calibration["field_type"] = "radio"
+                print(f"{Fore.CYAN}[+] Detected field type: RADIO BUTTONS ({radio_field.get('count', 0)} options)")
+            else:
+                checkbox_field = find_google_forms_checkboxes()
+                if checkbox_field:
+                    calibration["answer_field_info"] = checkbox_field
+                    calibration["field_type"] = "checkbox"
+                    print(f"{Fore.CYAN}[+] Detected field type: CHECKBOXES ({checkbox_field.get('count', 0)} options)")
+                else:
+                    select_field = find_google_forms_select()
+                    if select_field:
+                        calibration["answer_field_info"] = select_field
+                        calibration["field_type"] = "select"
+                        print(f"{Fore.CYAN}[+] Detected field type: SELECT DROPDOWN")
+        
+        return calibration
+    except Exception as e:
+        error_log.append(f"Calibration error: {str(e)[:80]}")
+        return None
+
+def find_google_forms_text_field():
+    """
+    Find text input/textarea field in Google Forms.
+    Returns element with additional metadata.
+    """
+    text_selectors = [
+        "input[type='text'][aria-label]",
+        "textarea[aria-label]",
+        "input[type='text'][aria-describedby]",
+        "textarea[aria-describedby]",
+        "input[type='text'][class*='input']",
+        "textarea[class*='textarea']",
+        "input[type='email']",
+        "input[type='url']",
+        "input[type='number']",
+        "div[role='textbox'][contenteditable='true']",
+        "input[type='text']:not([aria-hidden])",
+        "textarea:not([aria-hidden])",
+    ]
+    
+    for selector in text_selectors:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+            for elem in elements:
+                if elem.is_displayed() and not elem.get_attribute('aria-hidden'):
+                    # Get parent context for better identification
+                    parent = elem.find_element(By.XPATH, "..")
+                    return {
+                        "element": elem,
+                        "selector": selector,
+                        "parent": parent,
+                        "type": "text"
+                    }
+        except:
+            pass
+    
+    return None
+
+def find_google_forms_radio_buttons():
+    """
+    Find radio button group in Google Forms with their labels.
+    Returns list of (element, label_text) tuples with metadata.
+    """
+    radio_selectors = [
+        # Primary: Find by data-item-id (question container) then radio inputs within
+        ("div[data-item-id] input[type='radio']", "data-item-id input[type='radio']"),
+        # Secondary: Role-based
+        ("div[role='radio']", "role='radio'"),
+        # Tertiary: Find option containers with radio
+        ("div[class*='option'] input[type='radio']", "option input[type='radio']"),
+        # Fallback: Just radio inputs
+        ("input[type='radio']", "input[type='radio']"),
+    ]
+    
+    for selector, desc in radio_selectors:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+            visible_elements = []
+            
+            for elem in elements:
+                try:
+                    if not elem.is_displayed():
+                        continue
+                    if elem.get_attribute('aria-hidden') == 'true':
+                        continue
+                    
+                    # Get associated label text
+                    label_text = ""
+                    
+                    # Try to find parent label
+                    try:
+                        parent_label = elem.find_element(By.XPATH, "ancestor::label[1]")
+                        label_text = parent_label.text.strip()
+                    except:
+                        pass
+                    
+                    # If no label, try aria-label
+                    if not label_text:
+                        label_text = elem.get_attribute('aria-label') or ""
+                    
+                    # If still no label, try next sibling span
+                    if not label_text:
+                        try:
+                            next_span = elem.find_element(By.XPATH, "following-sibling::span[1]")
+                            label_text = next_span.text.strip()
+                        except:
+                            pass
+                    
+                    # Last resort: get parent div text
+                    if not label_text:
+                        try:
+                            parent_div = elem.find_element(By.XPATH, "ancestor::div[1]")
+                            label_text = parent_div.text.strip()
+                        except:
+                            label_text = elem.text.strip() or elem.get_attribute('value') or ""
+                    
+                    visible_elements.append((elem, label_text))
+                except:
+                    pass
+            
+            if len(visible_elements) > 1:  # Multiple options
+                print(f"{Fore.CYAN}[+] Found {len(visible_elements)} radio options using: {desc}")
+                return {
+                    "elements": visible_elements,
+                    "selector": selector,
+                    "count": len(visible_elements),
+                    "type": "radio"
+                }
+        except:
+            pass
+    
+    return None
+
+def find_google_forms_checkboxes():
+    """
+    Find checkbox group in Google Forms.
+    Returns list of checkbox elements with metadata.
+    """
+    checkbox_selectors = [
+        "input[type='checkbox']",
+        "div[role='checkbox']",
+        "div[class*='checkbox'][role='button']",
+        "label[class*='checkbox']",
+        "div[class*='option'][class*='checkbox']",
+    ]
+    
+    for selector in checkbox_selectors:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+            visible_elements = [e for e in elements if e.is_displayed() and not e.get_attribute('aria-hidden')]
+            if len(visible_elements) > 1:  # Multiple options
+                return {
+                    "elements": visible_elements,
+                    "selector": selector,
+                    "count": len(visible_elements),
+                    "type": "checkbox"
+                }
+        except:
+            pass
+    
+    return None
+
+def find_google_forms_select():
+    """
+    Find dropdown select in Google Forms.
+    Returns select element with metadata.
+    """
+    select_selectors = [
+        "select[aria-label]",
+        "select[aria-describedby]",
+        "div[role='listbox']",
+        "div[class*='dropdown']",
+        "select",
+    ]
+    
+    for selector in select_selectors:
+        try:
+            element = driver.find_element(By.CSS_SELECTOR, selector)
+            if element.is_displayed() and not element.get_attribute('aria-hidden'):
+                return {
+                    "element": element,
+                    "selector": selector,
+                    "type": "select"
+                }
+        except:
+            pass
+    
+    return None
 
 def detect_platform():
     """Detect which platform we're on (Yaklass or Google Forms)."""
@@ -334,6 +913,185 @@ def clean_answer(text):
     # Remove extra whitespace
     text = " ".join(text.split())
     return text.strip()
+
+def find_current_question_element():
+    """
+    Find the first unanswered question element on the page.
+    Uses ultra-smart extraction for precise identification.
+    """
+    platform = detect_platform()
+    
+    if platform == "google_forms":
+        # Use ultra-smart extraction
+        question_structure = extract_question_structure()
+        
+        if question_structure:
+            return question_structure["question_element"]
+        else:
+            print(f"{Fore.RED}[!] Ultra-smart extraction failed")
+            return None
+    
+    else:  # Yaklass
+        yaklass_selectors = [
+            "div#taskhtml",
+            "div.gxst-ibody",
+            "div.task-body",
+        ]
+        
+        for selector in yaklass_selectors:
+            try:
+                elem = driver.find_element(By.CSS_SELECTOR, selector)
+                if elem.is_displayed():
+                    return elem
+            except:
+                pass
+    
+    return None
+
+def detect_question_field_type(question_element=None):
+    """Detect field type for current question."""
+    if question_element is None:
+        question_element = find_current_question_element()
+    
+    if question_element is None:
+        return None
+    
+    try:
+        # Text input
+        text_inputs = question_element.find_elements(By.CSS_SELECTOR, "input[type='text'], textarea, input[type='email'], input[type='number']")
+        for elem in text_inputs:
+            if elem.is_displayed() and elem.get_attribute('aria-hidden') != 'true':
+                print(f"{Fore.CYAN}[+] Field type: TEXT INPUT")
+                return (elem, "text")
+        
+        # Radio buttons
+        radio_inputs = question_element.find_elements(By.CSS_SELECTOR, "input[type='radio']")
+        if len(radio_inputs) > 1:
+            radio_with_labels = []
+            for radio in radio_inputs:
+                if not radio.is_displayed():
+                    continue
+                
+                label_text = ""
+                try:
+                    parent_label = radio.find_element(By.XPATH, "ancestor::label[1]")
+                    label_text = parent_label.text.strip()
+                except:
+                    pass
+                
+                if not label_text:
+                    label_text = radio.get_attribute('aria-label') or ""
+                
+                if not label_text:
+                    try:
+                        next_span = radio.find_element(By.XPATH, "following-sibling::span[1]")
+                        label_text = next_span.text.strip()
+                    except:
+                        pass
+                
+                if not label_text:
+                    try:
+                        parent_div = radio.find_element(By.XPATH, "ancestor::div[1]")
+                        label_text = parent_div.text.strip()
+                    except:
+                        label_text = radio.get_attribute('value') or ""
+                
+                radio_with_labels.append((radio, label_text))
+            
+            if radio_with_labels:
+                print(f"{Fore.CYAN}[+] Field type: RADIO ({len(radio_with_labels)} options)")
+                return (radio_with_labels, "radio")
+        
+        # Checkboxes
+        checkboxes = question_element.find_elements(By.CSS_SELECTOR, "input[type='checkbox']")
+        if len(checkboxes) >= 1:
+            checkbox_with_labels = []
+            for checkbox in checkboxes:
+                if not checkbox.is_displayed():
+                    continue
+                
+                label_text = ""
+                try:
+                    parent_label = checkbox.find_element(By.XPATH, "ancestor::label[1]")
+                    label_text = parent_label.text.strip()
+                except:
+                    pass
+                
+                if not label_text:
+                    label_text = checkbox.get_attribute('aria-label') or ""
+                
+                if not label_text:
+                    try:
+                        parent_div = checkbox.find_element(By.XPATH, "ancestor::div[1]")
+                        label_text = parent_div.text.strip()
+                    except:
+                        label_text = checkbox.get_attribute('value') or ""
+                
+                checkbox_with_labels.append((checkbox, label_text))
+            
+            if checkbox_with_labels:
+                print(f"{Fore.CYAN}[+] Field type: CHECKBOX ({len(checkbox_with_labels)} options)")
+                return (checkbox_with_labels, "checkbox")
+        
+        # Select dropdown
+        try:
+            select = question_element.find_element(By.CSS_SELECTOR, "select")
+            if select.is_displayed():
+                print(f"{Fore.CYAN}[+] Field type: SELECT")
+                return (select, "select")
+        except:
+            pass
+    
+    except Exception as e:
+        error_log.append(f"Field type detection: {str(e)[:80]}")
+    
+    return None
+
+def extract_question_text(platform, question_element=None):
+    """Extract question text from specific question element."""
+    if question_element is None:
+        question_element = find_current_question_element()
+    
+    full_content = ""
+    
+    if question_element is None:
+        print(f"{Fore.YELLOW}[!] Could not find question element")
+        return ""
+    
+    try:
+        if platform == "google_forms":
+            question_selectors = [
+                "div[role='heading']",
+                "div[class*='prompt']",
+                "span[class*='title']",
+                "div[class*='text']",
+                "span",
+            ]
+            
+            for selector in question_selectors:
+                try:
+                    elements = question_element.find_elements(By.CSS_SELECTOR, selector)
+                    for elem in elements:
+                        text = elem.text.strip()
+                        if text and len(text) > 5 and "*" not in text[:3]:
+                            full_content = text
+                            break
+                    if full_content:
+                        break
+                except:
+                    pass
+            
+            if not full_content:
+                full_content = question_element.text.strip()
+        
+        else:
+            full_content = question_element.text.strip()
+    
+    except Exception as e:
+        error_log.append(f"Question extraction: {str(e)[:80]}")
+    
+    full_content = full_content.replace("*", "").strip()
+    return full_content
 
 def extract_core_answer(text):
     """Extract the core 2-5 word answer from a full response."""
@@ -638,7 +1396,7 @@ def select_best_match_option(options_element, answer, is_radio=False, is_checkbo
     Select the best matching option from multiple choice options.
     
     Args:
-        options_element: List of option elements or select dropdown
+        options_element: List of (element, label_text) tuples for radio/checkbox, or select element
         answer: The answer text to match
         is_radio: True if radio buttons
         is_checkbox: True if checkboxes
@@ -648,31 +1406,51 @@ def select_best_match_option(options_element, answer, is_radio=False, is_checkbo
     """
     try:
         answer_norm = normalize_answer(answer)
+        print(f"{Fore.CYAN}[*] Matching answer '{answer}' to options...")
         
         if isinstance(options_element, list):
-            # Radio or checkbox list
+            # Radio or checkbox list with (element, label_text) tuples
             best_match = None
             best_score = 0.0
+            best_label = ""
             
-            for option in options_element:
+            for option_elem, option_text in options_element:
                 try:
-                    # Get option text
-                    option_text = option.text.strip()
                     if not option_text:
-                        option_text = option.get_attribute('value')
+                        option_text = option_elem.get_attribute('value') or ""
                     
                     if option_text:
                         score = similarity_score(answer, option_text)
+                        print(f"{Fore.YELLOW}    Option '{option_text[:30]}': score={score:.2f}")
                         if score > best_score:
                             best_score = score
-                            best_match = option
-                except:
-                    pass
+                            best_match = option_elem
+                            best_label = option_text
+                except Exception as e:
+                    error_log.append(f"Option eval: {str(e)[:60]}")
             
-            if best_match and best_score > 0.3:
-                best_match.click()
-                time.sleep(0.3)
-                return True
+            if best_match and best_score >= 0.3:
+                print(f"{Fore.GREEN}[+] Matching option: '{best_label}' (score={best_score:.2f})")
+                try:
+                    best_match.click()
+                    time.sleep(0.5)
+                    return True
+                except Exception as click_err:
+                    # Try clicking parent if input is not clickable
+                    try:
+                        parent = best_match.find_element(By.XPATH, "ancestor::label[1]")
+                        parent.click()
+                        time.sleep(0.5)
+                        return True
+                    except:
+                        # Try scrolling and clicking again
+                        driver.execute_script("arguments[0].scrollIntoView(true);", best_match)
+                        time.sleep(0.3)
+                        best_match.click()
+                        time.sleep(0.5)
+                        return True
+            else:
+                print(f"{Fore.RED}[!] No good match found (best score: {best_score:.2f})")
         
         else:
             # Select dropdown
@@ -706,76 +1484,48 @@ def select_best_match_option(options_element, answer, is_radio=False, is_checkbo
 def find_answer_field():
     """
     Find answer input field - supports both Yaklass and Google Forms.
+    Uses calibration for Google Forms for better stability.
     Returns: (field_element, field_type) where field_type is 'text', 'select', 'radio', or 'checkbox'
     """
     platform = detect_platform()
     
     if platform == "google_forms":
-        # Google Forms: Look for text input, select, radio buttons, or checkboxes
+        # Use calibration for Google Forms
+        calibration = calibrate_google_forms()
         
+        if calibration and calibration.get("answer_field_info"):
+            field_info = calibration["answer_field_info"]
+            field_type = calibration.get("field_type")
+            
+            if field_type == "text":
+                return (field_info["element"], "text")
+            elif field_type == "radio":
+                return (field_info["elements"], "radio")
+            elif field_type == "checkbox":
+                return (field_info["elements"], "checkbox")
+            elif field_type == "select":
+                return (field_info["element"], "select")
+        
+        # Fallback: Manual detection without calibration
         # 1. Try text input field
-        text_selectors = [
-            "input[type='text'][aria-label]",
-            "textarea[aria-label]",
-            "input[type='text'][role='textbox']",
-            "textarea[role='textbox']",
-            "div[role='textbox'][contenteditable='true']",
-        ]
-        
-        for selector in text_selectors:
-            try:
-                element = driver.find_element(By.CSS_SELECTOR, selector)
-                if element.is_displayed():
-                    return (element, 'text')
-            except:
-                pass
+        text_field = find_google_forms_text_field()
+        if text_field:
+            return (text_field["element"], "text")
         
         # 2. Try select dropdown
-        select_selectors = [
-            "select[aria-label]",
-            "div[role='listbox']",
-            "div[class*='dropdown']",
-        ]
-        
-        for selector in select_selectors:
-            try:
-                element = driver.find_element(By.CSS_SELECTOR, selector)
-                if element.is_displayed():
-                    return (element, 'select')
-            except:
-                pass
+        select_field = find_google_forms_select()
+        if select_field:
+            return (select_field["element"], "select")
         
         # 3. Try radio buttons
-        radio_selectors = [
-            "input[type='radio']",
-            "div[role='radio']",
-            "div[class*='radio']",
-        ]
-        
-        for selector in radio_selectors:
-            try:
-                elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                for elem in elements:
-                    if elem.is_displayed():
-                        return (elements, 'radio')
-            except:
-                pass
+        radio_field = find_google_forms_radio_buttons()
+        if radio_field:
+            return (radio_field["elements"], "radio")
         
         # 4. Try checkboxes
-        checkbox_selectors = [
-            "input[type='checkbox']",
-            "div[role='checkbox']",
-            "div[class*='checkbox']",
-        ]
-        
-        for selector in checkbox_selectors:
-            try:
-                elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                for elem in elements:
-                    if elem.is_displayed():
-                        return (elements, 'checkbox')
-            except:
-                pass
+        checkbox_field = find_google_forms_checkboxes()
+        if checkbox_field:
+            return (checkbox_field["elements"], "checkbox")
     
     else:  # Yaklass
         # Original Yaklass selectors
@@ -794,7 +1544,7 @@ def find_answer_field():
             try:
                 element = driver.find_element(By.CSS_SELECTOR, selector)
                 if element.is_displayed():
-                    return (element, 'text')
+                    return (element, "text")
             except:
                 pass
     
@@ -898,136 +1648,116 @@ def solve_task():
     error_log = []
     question_start_time = time.time()
     
-    # Detect platform
     platform = detect_platform()
     stats["questions_solved"] += 1
     q_num = stats["questions_solved"]
     
-    print(f"\n{Fore.CYAN}{'─'*50}")
+    print(f"\n{Fore.CYAN}{'─'*60}")
     print(f"{Fore.CYAN}[?] Question #{q_num} ({platform.upper()})")
-    print(f"{Fore.CYAN}{'─'*50}")
-    
-    full_content = ""
+    print(f"{Fore.CYAN}{'─'*60}")
     
     try:
+        # ULTRA-SMART WORKFLOW FOR GOOGLE FORMS
         if platform == "google_forms":
-            # Google Forms: Look for question text in specific containers
-            selectors = [
-                "div[data-item-id] div[class*='title']",  # Question title
-                "div[role='heading']",
-                "div[class*='question']",
-                "span[class*='title']",
-                "h2[class*='heading']",
-                "div[role='img'][aria-label]",  # For image-based questions
-            ]
-        else:
-            # Yaklass: Original selectors
-            selectors = [
-                "div#taskhtml",
-                "div.gxst-ibody",
-                "div.task-body",
-                "div.question-text",
-                "div[class*='task']",
-                "div[class*='question']",
-            ]
-        
-        for selector in selectors:
-            try:
-                task_element = driver.find_element(By.CSS_SELECTOR, selector)
-                if task_element.text.strip():
-                    full_content = task_element.text
-                    break
-            except:
-                pass
-
-        if not full_content:
-            try:
-                body_text = driver.find_element(By.TAG_NAME, "body").text
-                # Get first 500 chars of body
-                full_content = body_text[:500]
-            except:
-                pass
-        
-        if full_content:
-            print(f"{Fore.CYAN}[+] Extracted: {full_content[:MAX_QUESTION_PREVIEW_LENGTH]}...")
-        
-    except Exception as e:
-        error_log.append(f"Scraping: {str(e)[:MAX_ERROR_MSG_LENGTH]}")
-        print(f"{Fore.RED}[!] Failed to extract question")
-        try:
-            full_content = pyperclip.paste()
-            if full_content:
-                print(f"{Fore.CYAN}[+] Used clipboard: {full_content[:MAX_QUESTION_PREVIEW_LENGTH]}...")
-        except Exception:
-            print(f"{Fore.RED}[!] No question text found")
-            stats["questions_failed"] += 1
-            return
-
-    if not full_content.strip():
-        print(f"{Fore.RED}[!] Question is empty!")
-        stats["questions_failed"] += 1
-        return
-
-    try:
-        # Get answers from all models
-        answers = get_answers_from_models(full_content)
-        answer = verify_and_select_answer(answers)
-        
-        if answer is None:
-            print(f"{Fore.RED}[!] No consensus reached")
-            stats["questions_failed"] += 1
-            try:
-                now = datetime.now()
-                log_path = LOG_DIR / f"failure_{now.strftime('%Y%m%d_%H%M%S')}.json"
-                with open(log_path, 'w', encoding='utf-8') as f:
-                    json.dump({
-                        'platform': platform,
-                        'question': full_content[:MAX_LOGGED_CONTENT_LENGTH],
-                        'responses': answers,
-                        'errors': error_log,
-                        'selected': None,
-                        'timestamp': now.isoformat()
-                    }, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
-            return
+            print(f"{Fore.CYAN}[*] Starting ultra-smart question extraction...")
             
-    except Exception as e:
-        error_log.append(f"AI Query: {str(e)[:MAX_ERROR_MSG_LENGTH]}")
-        print(f"{Fore.RED}[!] AI Error: {str(e)[:60]}")
-        stats["questions_failed"] += 1
-        return
-
-    try:
-        success = type_answer(answer)
-        if not success:
-            print(f"{Fore.RED}[!] Failed to answer. Copied to clipboard.")
-            pyperclip.copy(answer)
-            stats["questions_failed"] += 1
-            try:
-                now = datetime.now()
-                log_path = LOG_DIR / f"failure_typing_{now.strftime('%Y%m%d_%H%M%S')}.json"
-                with open(log_path, 'w', encoding='utf-8') as f:
-                    json.dump({
-                        'platform': platform,
-                        'question': full_content[:MAX_LOGGED_CONTENT_LENGTH],
-                        'answer': answer,
-                        'error': 'Failed to type/select',
-                        'errors': error_log,
-                        'timestamp': now.isoformat()
-                    }, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
-            return
-        print(f"{Fore.GREEN}[+] Answer entered: '{answer}'")
+            # Step 1: Extract complete question structure (text + options)
+            question_structure = extract_question_structure()
+            if not question_structure:
+                print(f"{Fore.RED}[!] Could not extract question structure")
+                stats["questions_failed"] += 1
+                return
+            
+            full_content = question_structure["question_text"]
+            available_options = question_structure["options"]
+            field_type = question_structure["field_type"]
+            
+            print(f"{Fore.CYAN}[+] Question text: {full_content[:MAX_QUESTION_PREVIEW_LENGTH]}...")
+            print(f"{Fore.CYAN}[+] Found {len(available_options)} option(s)")
+            
+            if not full_content.strip():
+                print(f"{Fore.RED}[!] Question text is empty!")
+                stats["questions_failed"] += 1
+                return
+            
+            # Step 2: Get answers from AI models
+            print(f"{Fore.CYAN}[*] Getting AI answers...")
+            answers = get_answers_from_models(full_content)
+            ai_answer = verify_and_select_answer(answers)
+            
+            if not ai_answer:
+                print(f"{Fore.RED}[!] No consensus reached from AI models")
+                stats["questions_failed"] += 1
+                return
+            
+            # Step 3: INTELLIGENT MATCHING - Match AI answer to actual options
+            print(f"{Fore.CYAN}[*] Matching AI answer to available options...")
+            matched = match_answer_to_option(ai_answer, available_options)
+            
+            if not matched:
+                print(f"{Fore.RED}[!] Could not match answer to any option")
+                stats["questions_failed"] += 1
+                return
+            
+            # Step 4: PRECISE SELECTION - Select the matched option
+            print(f"{Fore.CYAN}[*] Selecting the matched option...")
+            success = select_answer_option(matched)
+            
+            if not success:
+                print(f"{Fore.RED}[!] Failed to select answer option")
+                stats["questions_failed"] += 1
+                return
+            
+            print(f"{Fore.GREEN}[✓] Answer selected successfully!")
         
-    except Exception as e:
-        error_log.append(f"Typing: {str(e)[:MAX_ERROR_MSG_LENGTH]}")
-        print(f"{Fore.RED}[!] Typing error: {str(e)[:60]}")
-        stats["questions_failed"] += 1
-        return
-    
-    try:
+        else:  # YAKLASS
+            print(f"{Fore.CYAN}[*] Finding current question...")
+            question_element = find_current_question_element()
+            
+            if question_element is None:
+                print(f"{Fore.RED}[!] Could not find current question element")
+                stats["questions_failed"] += 1
+                return
+            
+            print(f"{Fore.CYAN}[*] Extracting question text...")
+            full_content = extract_question_text(platform, question_element)
+            
+            if not full_content.strip():
+                print(f"{Fore.RED}[!] Question text is empty!")
+                stats["questions_failed"] += 1
+                return
+            
+            print(f"{Fore.CYAN}[+] Question: {full_content[:MAX_QUESTION_PREVIEW_LENGTH]}...")
+            
+            # Get answers from AI
+            print(f"{Fore.CYAN}[*] Getting AI answers...")
+            answers = get_answers_from_models(full_content)
+            ai_answer = verify_and_select_answer(answers)
+            
+            if not ai_answer:
+                print(f"{Fore.RED}[!] No consensus reached")
+                stats["questions_failed"] += 1
+                return
+            
+            # Type answer for Yaklass
+            try:
+                answer_field, field_type = find_answer_field()
+                if field_type == "text" and answer_field:
+                    answer_field.click()
+                    time.sleep(0.2)
+                    human_type(answer_field, ai_answer)
+                    print(f"{Fore.GREEN}[+] Typed: '{ai_answer}'")
+                else:
+                    print(f"{Fore.RED}[!] Could not find text field for Yaklass")
+                    stats["questions_failed"] += 1
+                    return
+            except Exception as e:
+                print(f"{Fore.RED}[!] Failed to type answer: {str(e)[:60]}")
+                stats["questions_failed"] += 1
+                return
+        
+        # Step 5: Submit the answer
+        print(f"{Fore.CYAN}[*] Submitting answer...")
         time.sleep(PAGE_LOAD_DELAY)
         submit_button = find_submit_button()
         
@@ -1046,25 +1776,43 @@ def solve_task():
                         'question_num': q_num,
                         'platform': platform,
                         'question': full_content[:MAX_LOGGED_CONTENT_LENGTH],
-                        'answer': answer,
+                        'answer': ai_answer,
                         'time_taken': round(elapsed, 2),
                         'timestamp': now.isoformat()
                     }, f, ensure_ascii=False, indent=2)
-            except Exception:
+            except:
                 pass
         else:
             print(f"{Fore.YELLOW}[!] Submit button not found")
             stats["questions_failed"] += 1
             return
         
-    except Exception as e:
-        error_log.append(f"Submit: {str(e)[:MAX_ERROR_MSG_LENGTH]}")
-        print(f"{Fore.RED}[!] Submit error: {str(e)[:60]}")
-        stats["questions_failed"] += 1
-        return
+        # Step 6: Move to next question or finish
+        print(f"{Fore.CYAN}[*] Looking for next question...")
+        time.sleep(NAVIGATION_WAIT_TIME)
+        next_button = find_next_button()
+        
+        if next_button:
+            print(f"{Fore.YELLOW}[→] Moving to next question...")
+            time.sleep(NAVIGATION_WAIT_TIME)
+            next_button.click()
+            time.sleep(NEXT_PAGE_WAIT_TIME)
+            # RECURSIVE: Automatically solve next question
+            solve_task()
+        else:
+            elapsed = time.time() - stats["start_time"]
+            print(f"\n{Fore.GREEN}{'='*60}")
+            print(f"{Fore.GREEN}[✓] TEST COMPLETED!")
+            print(f"{Fore.CYAN}    Platform: {platform.upper()}")
+            print(f"{Fore.CYAN}    Total Solved: {stats['questions_solved']}")
+            print(f"{Fore.CYAN}    Total Failed: {stats['questions_failed']}")
+            print(f"{Fore.CYAN}    Time Elapsed: {int(elapsed)}s")
+            print(f"{Fore.GREEN}{'='*60}\n")
     
-    # Look for next button or check if form is complete
-    try:
+    except Exception as e:
+        error_log.append(f"Solve error: {str(e)[:MAX_ERROR_MSG_LENGTH]}")
+        print(f"{Fore.RED}[!] Unexpected error: {str(e)[:80]}")
+        stats["questions_failed"] += 1
         time.sleep(NAVIGATION_WAIT_TIME)
         next_button = find_next_button()
         
