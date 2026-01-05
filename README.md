@@ -1,7 +1,7 @@
 <div align="center">
 
 # 🧠 AI Homework Solver Bot
-### Automated Multi-Platform Assistant
+### Automated Yaklass Solver
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![Selenium](https://img.shields.io/badge/Selenium-Automation-43B02A?style=for-the-badge&logo=selenium&logoColor=white)](https://www.selenium.dev/)
@@ -9,10 +9,10 @@
 [![Groq](https://img.shields.io/badge/Accelerated%20by-Groq-F55036?style=for-the-badge)](https://groq.com)
 
 <p align="center">
-  <img src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExMzM0c3lkM3V4M3V4M3V4M3V4M3V4M3V4M3V4M3V4/26tn33aiTi1jkl6Hz/giphy.gif" width="600" alt="AI Bot Demo">
+  <img src="https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExdHR6azdpcmhjMzBjc2pyaXJxb294eXMwMHl0cnhqOTJybjlweHJ4eCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/11F0d3IVhQbreE/giphy.gif" width="600" alt="You got this">
 </p>
 
-*Intelligently solves **Yaklass** and **Google Forms** tests in real-time using a consensus of advanced AI models.*
+*practically solves **Yaklass** and **Google Forms** tests in real-time using a consensus of advanced AI models.*
 
 [Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Configuration](#-configuration)
 
@@ -22,7 +22,7 @@
 
 ## 📖 About
 
-This bot is a sophisticated automation tool designed to assist with online tests. Instead of relying on a single AI source, it queries **multiple LLMs in parallel** (via Perplexity and Groq), compares their answers using similarity matching, and votes on the best response. It then interacts directly with the browser to type or select the correct answer automatically.
+This bot is a sophisticated automation tool designed to help with online tests. Instead of relying on a single AI source, it queries **multiple LLMs in parallel** (via Perplexity and Groq), compares their answers using similarity matching, and votes on the best response. It then interacts directly with the browser to type or select the correct answer automatically.
 
 ## ✨ Features
 
@@ -36,12 +36,13 @@ This bot is a sophisticated automation tool designed to assist with online tests
   - Auto-submits and navigates to the next question.
 - **🎨 Aesthetic CLI**: Beautiful color-coded terminal output with live status updates.
 - **🔄 Recursive Solving**: Capable of looping through entire test suites without human intervention.
+- **The Google Form test** is in **DEVELOPMENT** so be careful or expect bugs or it might not work.
 
 ## 🛠️ Installation
 
 ### 1. Prerequisites
 - **Python 3.10+**
-- **Google Chrome**
+- **Google Chrome debugger edition**
 
 ### 2. Clone & Install
 ```bash
