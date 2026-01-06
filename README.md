@@ -22,7 +22,7 @@
 
 ## 📖 About
 
-This bot is a sophisticated automation tool designed to help with online tests. Instead of relying on a single AI source, it queries **multiple LLMs in parallel** (via Perplexity and Groq), compares their answers using similarity matching, and votes on the best response. It then interacts directly with the browser to type or select the correct answer automatically.
+This bot is designed to help with online tests. Instead of relying on a single AI source, it queries **multiple LLMs in parallel** (via Perplexity and Groq **you can add yourself**), compares their answers using similarity matching, and votes on the best response. It then interacts directly with the browser to type or select the correct answer automatically.
 
 ## ✨ Features
 
@@ -35,9 +35,7 @@ This bot is a sophisticated automation tool designed to help with online tests. 
   - Selects **Radio Buttons**, **Checkboxes**, and **Dropdowns**.
   - Auto-submits and navigates to the next question.
 - **🎨 Aesthetic CLI**: Beautiful color-coded terminal output with live status updates.
-- **🔄 Recursive Solving**: Capable of looping through entire test suites without human intervention.
-- **The Google Form test** is in **DEVELOPMENT** so be careful or expect bugs or it might not work.
-
+- **The Google Form test** is in **DEVELOPMENT** so be careful or expect **BUGS**
 ## 🛠️ Installation
 
 ### 1. Prerequisites
@@ -46,6 +44,9 @@ This bot is a sophisticated automation tool designed to help with online tests. 
 
 ### 2. Clone & Install
 ```bash
+# Create a shortcut in desktop for chrome debugger
+in location of the item type: "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\selenium\ChromeProfile"
+
 # Clone the repository
 git clone https://github.com/TheDye/Yaklass_Solver_bot.git
 cd Yaklass_Solver_bot
