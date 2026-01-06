@@ -45,7 +45,7 @@ This bot is designed to help with online tests. Instead of relying on a single A
 ### 2. Clone & Install
 ```bash
 # Create a shortcut in desktop for chrome debugger
-in location of the item type: "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\selenium\ChromeProfile"
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\selenium\ChromeProfile"
 
 # Clone the repository
 git clone https://github.com/TheDye/Yaklass_Solver_bot.git
