@@ -18,11 +18,10 @@ Features:
 Setup:
   1. Create .env file with PERPLEXITY_API_KEY and GROQ_API_KEY
   2. Run script and press F8 on any question page (Yaklass or Google Forms)
-  3. Bot will automatically detect platform and solve questions
-  4. Works with both text answers and multiple choice (select/radio/checkbox)
+  3. Bot should automatically detect platform and solve questions
+  4. Works with both text answers and multiple choice
 
-Author: Bot
-Version: 2.1 (Multi-platform: Yaklass + Google Forms)
+Author: Dye
 """
 import threading
 import time
@@ -102,7 +101,7 @@ if not validated:
     input(f"{Fore.RED}Press Enter to exit...")
     exit()
 
-# ==================== CONFIGURATION CONSTANTS ====================
+# ==================== CONFIGURATION ====================
 
 HOTKEY = "F8"
 CHROME_DEBUG_PORT = "127.0.0.1:9222"
@@ -117,7 +116,7 @@ MAX_QUESTION_PREVIEW_LENGTH = 60
 MAX_LOGGED_CONTENT_LENGTH = 500
 MAX_ERROR_MSG_LENGTH = 80
 
-# Consensus configuration
+# configuration
 REQUIRED_RATIO = float(os.getenv("REQUIRED_RATIO", "0.6"))
 MIN_REQUIRED = int(os.getenv("MIN_REQUIRED", "3"))
 PREFER_PERPLEXITY = os.getenv("PREFER_PERPLEXITY", "1") in ("1", "true", "True")
@@ -128,7 +127,7 @@ INITIAL_BACKOFF = 0.3
 MAX_BACKOFF = 0.9
 BACKOFF_MULTIPLIER = 1.5
 
-# Platform detection (set dynamically)
+# Platform detection
 CURRENT_PLATFORM = None  # Will be 'yaklass' or 'google_forms'
 
 perplexity_client = OpenAI(api_key=pplx_key, base_url="https://api.perplexity.ai")
@@ -153,7 +152,7 @@ def fetch_groq_models():
             "reasoning-gpt-oss-120b",
         ]
 
-# Available Perplexity models (API doesn't expose list endpoint, so we use known models)
+# Available Perplexity models 
 PERPLEXITY_MODELS_KNOWN = [
     "sonar-pro",
     "sonar",
@@ -278,18 +277,235 @@ except Exception as e:
     input("Press Enter to exit...")
     exit()
 
+# ==================== DIAGNOSTICS & INTERACTIVE MODE ====================
+
+def run_diagnostics():
+    """Run self-test to check API keys, Chrome connection, and dependencies."""
+    print(f"\n{Fore.MAGENTA}{'='*60}")
+    print(f"{Fore.MAGENTA}[🔧] RUNNING DIAGNOSTICS...")
+    print(f"{Fore.MAGENTA}{'='*60}\n")
+    
+    checks_passed = 0
+    checks_total = 0
+    
+    # 1. Check API keys
+    checks_total += 1
+    print(f"{Fore.CYAN}[1] Checking API Keys...")
+    pplx_key = os.getenv("PERPLEXITY_API_KEY", "").strip()
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    
+    if pplx_key and len(pplx_key) > 10:
+        print(f"    {Fore.GREEN}✓ Perplexity API key valid ({len(pplx_key)} chars)")
+        checks_passed += 1
+    else:
+        print(f"    {Fore.RED}✗ Perplexity API key missing or invalid")
+    
+    if groq_key and len(groq_key) > 10:
+        print(f"    {Fore.GREEN}✓ Groq API key valid ({len(groq_key)} chars)")
+        checks_passed += 1
+    else:
+        print(f"    {Fore.RED}✗ Groq API key missing or invalid")
+    
+    # 2. Check Chrome connection
+    checks_total += 1
+    print(f"\n{Fore.CYAN}[2] Checking Chrome Connection...")
+    try:
+        driver.get_window_handles()
+        print(f"    {Fore.GREEN}✓ Chrome debugger connected")
+        checks_passed += 1
+    except Exception as e:
+        print(f"    {Fore.RED}✗ Chrome connection failed: {str(e)[:60]}")
+    
+    # 3. Check dependencies
+    checks_total += 1
+    print(f"\n{Fore.CYAN}[3] Checking Dependencies...")
+    try:
+        import selenium
+        import groq
+        import openai
+        import colorama
+        import keyboard
+        import pyperclip
+        print(f"    {Fore.GREEN}✓ All required packages installed")
+        checks_passed += 1
+    except ImportError as e:
+        print(f"    {Fore.RED}✗ Missing package: {str(e)[:60]}")
+    
+    # 4. Check working models
+    checks_total += 1
+    print(f"\n{Fore.CYAN}[4] Checking AI Models...")
+    if len(WORKING_MODELS) >= 2:
+        print(f"    {Fore.GREEN}✓ {len(WORKING_MODELS)} working AI models available")
+        for provider, model in WORKING_MODELS[:5]:
+            print(f"      • {provider.upper()}: {model}")
+        checks_passed += 1
+    else:
+        print(f"    {Fore.RED}✗ Less than 2 working models found")
+    
+    # Summary
+    print(f"\n{Fore.MAGENTA}{'='*60}")
+    print(f"{Fore.CYAN}Diagnostics: {checks_passed}/{checks_total} checks passed")
+    
+    if checks_passed == checks_total:
+        print(f"{Fore.GREEN}[✓] Bot is ready to solve questions!")
+    else:
+        print(f"{Fore.YELLOW}[!] Please fix issues above before continuing")
+    
+    print(f"{Fore.MAGENTA}{'='*60}\n")
+    return checks_passed == checks_total
+
+def interactive_element_selector():
+    """
+    Allow user to click on page elements to identify question/answer divs.
+    Helps users understand page structure when auto-detection fails.
+    """
+    print(f"\n{Fore.YELLOW}{'='*60}")
+    print(f"{Fore.YELLOW}[🔍] INTERACTIVE ELEMENT SELECTOR")
+    print(f"{Fore.YELLOW}{'='*60}")
+    print(f"{Fore.CYAN}Instructions:")
+    print(f"  1. Click on the QUESTION text on the page")
+    print(f"  2. Bot will identify and show div class, id, and structure")
+    print(f"  3. Click on the ANSWER field (radio/checkbox/text)")
+    print(f"  4. Bot will identify and show field type and structure")
+    print(f"  5. Type 'done' in console to exit\n")
+    
+    try:
+        # Inject JavaScript to track clicks
+        driver.execute_script("""
+            window._selectedElement = null;
+            window._selectedElements = [];
+            
+            document.addEventListener('click', function(e) {
+                if (e.target && e.target.tagName !== 'BODY') {
+                    window._selectedElement = e.target;
+                    window._selectedElements.push(e.target);
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('Element selected:', e.target);
+                }
+            }, true);
+        """)
+        
+        while True:
+            user_input = input(f"{Fore.CYAN}[?] Click element on page (or type 'done' to exit): ").strip().lower()
+            
+            if user_input == 'done':
+                print(f"{Fore.YELLOW}[!] Exiting element selector")
+                break
+            
+            try:
+                # Get the last clicked element
+                elem = driver.execute_script("return window._selectedElement;")
+                
+                if elem:
+                    # Get element info
+                    tag = driver.execute_script("return arguments[0].tagName;", elem)
+                    class_name = driver.execute_script("return arguments[0].className;", elem)
+                    elem_id = driver.execute_script("return arguments[0].id;", elem)
+                    text_content = driver.execute_script("return arguments[0].textContent;", elem)[:100]
+                    
+                    # Check if it's a question or answer field
+                    input_type = driver.execute_script("""
+                        if (arguments[0].tagName === 'INPUT') return arguments[0].type;
+                        if (arguments[0].tagName === 'TEXTAREA') return 'textarea';
+                        if (arguments[0].tagName === 'SELECT') return 'select';
+                        return 'text';
+                    """, elem)
+                    
+                    print(f"\n{Fore.GREEN}[✓] Element Info:")
+                    print(f"    Tag: {tag}")
+                    print(f"    ID: {elem_id if elem_id else '(none)'}")
+                    print(f"    Class: {class_name if class_name else '(none)'}")
+                    print(f"    Input Type: {input_type}")
+                    print(f"    Text: {text_content}")
+                    print()
+                else:
+                    print(f"{Fore.YELLOW}[!] No element selected. Click on the page first.")
+            except Exception as e:
+                print(f"{Fore.RED}[!] Error: {str(e)[:60]}")
+    
+    except Exception as e:
+        print(f"{Fore.RED}[!] Interactive selector error: {str(e)[:60]}")
+
 def normalize_answer(text):
     return " ".join(text.lower().strip().split())
 
+# ==================== QUESTION TYPE VERIFICATION ====================
+
+def verify_question_type_with_user(question_text, field_type, options):
+    """
+    Ask user to confirm detected question type and offer manual override.
+    Helps catch auto-detection errors early.
+    """
+    print(f"\n{Fore.YELLOW}[?] VERIFY QUESTION TYPE:")
+    print(f"    Question: {question_text[:80]}...")
+    print(f"    Detected Type: {field_type.upper()}")
+    print(f"    Options: {len(options)}")
+    
+    if field_type == "text":
+        print(f"    [1] Text field (CONFIRMED)")
+        print(f"    [2] Change to Radio Button")
+        print(f"    [3] Change to Checkbox")
+        print(f"    [4] Change to Dropdown")
+    elif field_type == "radio":
+        print(f"    [1] Radio Button (CONFIRMED)")
+        print(f"    [2] Change to Text field")
+        print(f"    [3] Change to Checkbox")
+        print(f"    [4] Change to Dropdown")
+    elif field_type == "checkbox":
+        print(f"    [1] Checkbox (CONFIRMED)")
+        print(f"    [2] Change to Radio Button")
+        print(f"    [3] Change to Text field")
+        print(f"    [4] Change to Dropdown")
+    elif field_type == "select":
+        print(f"    [1] Dropdown (CONFIRMED)")
+        print(f"    [2] Change to Radio Button")
+        print(f"    [3] Change to Text field")
+        print(f"    [4] Change to Checkbox")
+    
+    try:
+        choice = input(f"{Fore.CYAN}    Choice (1-4): ").strip()
+        return choice == "1"  # Return True if user confirmed, False if they want to change
+    except:
+        return True  # Default to confirmed
+
+def find_question_div_interactive():
+    """
+    If auto-detection fails, let user click to identify question div.
+    Returns the selected div element or None.
+    """
+    print(f"\n{Fore.YELLOW}[!] Auto-detection failed. Let's identify manually.")
+    print(f"{Fore.CYAN}[*] Click on the QUESTION TEXT on the page...")
+    print(f"{Fore.CYAN}[*] Then press Enter in console")
+    
+    try:
+        input(f"{Fore.CYAN}[?] Press Enter after clicking: ")
+        
+        # Get elements that were clicked
+        clicked_elements = driver.execute_script("""
+            return window._selectedElements || [];
+        """)
+        
+        if clicked_elements:
+            print(f"{Fore.GREEN}[✓] Found {len(clicked_elements)} clicked element(s)")
+            return clicked_elements[0] if clicked_elements else None
+        else:
+            print(f"{Fore.RED}[!] No elements clicked")
+            return None
+    except Exception as e:
+        print(f"{Fore.RED}[!] Error: {str(e)[:60]}")
+        return None
+
 # ==================== PLATFORM DETECTION & CALIBRATION ====================
 
-def extract_question_structure():
+def extract_question_structure(use_interactive=False):
     """
     PRECISION EXTRACTION: Finds exact question + options in one operation.
     Algorithm:
     1. Scan ALL divs for ones with text + input fields together
     2. Score by self-containment (question text + options nearby)
     3. Return the best match with all metadata needed
+    4. Optionally allow user to click elements if auto-detection fails
     """
     print(f"\n{Fore.CYAN}[🎯] EXTRACTING QUESTION STRUCTURE (PRECISION MODE)...")
     
@@ -1268,24 +1484,6 @@ def verify_and_select_answer(answers, required_matches=None):
     counts = {}
     per_provider_counts = {}
 
-    for model1, ans1 in answers:
-        # Already extracted, just use directly
-        match_count = sum(1 for _, ans2 in answers if similarity_score(ans1, ans2) >= 0.7)
-        print(f"    {model1}: '{ans1}' (matches: {match_count}/{len(answers)})")
-        norm = normalize_answer(ans1)
-        counts.setdefault(norm, 0)
-        counts[norm] = max(counts[norm], match_count)
-
-        # provider-specific votes
-        provider = model1.split(":")[0].lower()
-        per_provider_counts.setdefault(norm, {})
-        per_provider_counts[norm].setdefault(provider, 0)
-        per_provider_counts[norm][provider] += 1
-
-        if match_count > best_match_count:
-            best_match_count = match_count
-            best_answer = ans1
-
     total_models = len(answers)
     if required_matches is None:
         required_matches = max(MIN_REQUIRED, math.ceil(REQUIRED_RATIO * total_models))
@@ -1657,116 +1855,145 @@ def solve_task():
     print(f"{Fore.CYAN}{'─'*60}")
     
     try:
-        # ULTRA-SMART WORKFLOW FOR GOOGLE FORMS
+        # Unified workflow for both platforms with robust error handling and retries
+        def retry(action, retries=3, delay=0.7, err_msg=None):
+            for attempt in range(retries):
+                try:
+                    return action()
+                except Exception as e:
+                    if attempt == retries - 1:
+                        if err_msg:
+                            print(f"{Fore.RED}{err_msg}: {str(e)[:60]}")
+                        raise
+                    time.sleep(delay * (1.5 ** attempt))
+
         if platform == "google_forms":
             print(f"{Fore.CYAN}[*] Starting ultra-smart question extraction...")
-            
-            # Step 1: Extract complete question structure (text + options)
-            question_structure = extract_question_structure()
+            question_structure = retry(lambda: extract_question_structure(), err_msg="[!] Could not extract question structure")
             if not question_structure:
                 print(f"{Fore.RED}[!] Could not extract question structure")
                 stats["questions_failed"] += 1
                 return
-            
             full_content = question_structure["question_text"]
             available_options = question_structure["options"]
             field_type = question_structure["field_type"]
-            
             print(f"{Fore.CYAN}[+] Question text: {full_content[:MAX_QUESTION_PREVIEW_LENGTH]}...")
             print(f"{Fore.CYAN}[+] Found {len(available_options)} option(s)")
+            print(f"{Fore.CYAN}[+] Field type: {field_type.upper()}")
+            
+            # Verify question type with user
+            if len(available_options) > 0:
+                type_confirmed = verify_question_type_with_user(full_content, field_type, available_options)
+                if not type_confirmed:
+                    print(f"{Fore.YELLOW}[!] Type mismatch detected. Retrying with interactive mode...")
+                    interactive_element_selector()
+                    stats["questions_failed"] += 1
+                    return
             
             if not full_content.strip():
                 print(f"{Fore.RED}[!] Question text is empty!")
                 stats["questions_failed"] += 1
                 return
-            
-            # Step 2: Get answers from AI models
             print(f"{Fore.CYAN}[*] Getting AI answers...")
-            answers = get_answers_from_models(full_content)
+            answers = retry(lambda: get_answers_from_models(full_content), err_msg="[!] AI answer fetch failed")
             ai_answer = verify_and_select_answer(answers)
-            
             if not ai_answer:
                 print(f"{Fore.RED}[!] No consensus reached from AI models")
                 stats["questions_failed"] += 1
                 return
-            
-            # Step 3: INTELLIGENT MATCHING - Match AI answer to actual options
             print(f"{Fore.CYAN}[*] Matching AI answer to available options...")
             matched = match_answer_to_option(ai_answer, available_options)
-            
             if not matched:
                 print(f"{Fore.RED}[!] Could not match answer to any option")
                 stats["questions_failed"] += 1
                 return
-            
-            # Step 4: PRECISE SELECTION - Select the matched option
             print(f"{Fore.CYAN}[*] Selecting the matched option...")
-            success = select_answer_option(matched)
-            
+            success = retry(lambda: select_answer_option(matched), err_msg="[!] Failed to select answer option")
             if not success:
                 print(f"{Fore.RED}[!] Failed to select answer option")
                 stats["questions_failed"] += 1
                 return
-            
             print(f"{Fore.GREEN}[✓] Answer selected successfully!")
-        
-        else:  # YAKLASS
+        else:
             print(f"{Fore.CYAN}[*] Finding current question...")
-            question_element = find_current_question_element()
-            
+            question_element = retry(lambda: find_current_question_element(), err_msg="[!] Could not find current question element")
             if question_element is None:
                 print(f"{Fore.RED}[!] Could not find current question element")
                 stats["questions_failed"] += 1
                 return
-            
             print(f"{Fore.CYAN}[*] Extracting question text...")
             full_content = extract_question_text(platform, question_element)
-            
             if not full_content.strip():
                 print(f"{Fore.RED}[!] Question text is empty!")
                 stats["questions_failed"] += 1
                 return
-            
             print(f"{Fore.CYAN}[+] Question: {full_content[:MAX_QUESTION_PREVIEW_LENGTH]}...")
-            
-            # Get answers from AI
             print(f"{Fore.CYAN}[*] Getting AI answers...")
-            answers = get_answers_from_models(full_content)
+            answers = retry(lambda: get_answers_from_models(full_content), err_msg="[!] AI answer fetch failed")
             ai_answer = verify_and_select_answer(answers)
-            
             if not ai_answer:
                 print(f"{Fore.RED}[!] No consensus reached")
                 stats["questions_failed"] += 1
                 return
-            
-            # Type answer for Yaklass
+            # Try Yaklass text field first
+            answer_field, field_type = None, None
             try:
-                answer_field, field_type = find_answer_field()
-                if field_type == "text" and answer_field:
-                    answer_field.click()
-                    time.sleep(0.2)
-                    human_type(answer_field, ai_answer)
-                    print(f"{Fore.GREEN}[+] Typed: '{ai_answer}'")
-                else:
-                    print(f"{Fore.RED}[!] Could not find text field for Yaklass")
+                answer_field, field_type = retry(lambda: find_answer_field(), err_msg="[!] Could not find answer field")
+            except Exception as e:
+                answer_field, field_type = None, None
+            if field_type == "text" and answer_field:
+                print(f"{Fore.GREEN}[Yaklass] Хамгийн сайн таарсан хариулт: {Fore.YELLOW}{ai_answer}")
+                retry(lambda: answer_field.click(), err_msg="[!] Could not click answer field")
+                time.sleep(0.2)
+                human_type(answer_field, ai_answer)
+                print(f"{Fore.GREEN}[+] Typed: '{ai_answer}'")
+            else:
+                # Try Yaklass multiple choice (checkbox/radio)
+                print(f"{Fore.YELLOW}[Yaklass] No text field, trying multiple choice options...")
+                options = []
+                # Checkbox
+                checkbox_lis = question_element.find_elements(By.CSS_SELECTOR, ".gxs-answer-select li")
+                for li in checkbox_lis:
+                    try:
+                        inp = li.find_element(By.CSS_SELECTOR, "input[type='checkbox']")
+                        label = li.find_element(By.CSS_SELECTOR, "label .select-text")
+                        label_text = label.text.strip()
+                        options.append({"element": inp, "text": label_text, "type": "checkbox"})
+                    except Exception:
+                        pass
+                # Radio
+                radio_lis = question_element.find_elements(By.CSS_SELECTOR, ".gxs-answer-select li")
+                for li in radio_lis:
+                    try:
+                        inp = li.find_element(By.CSS_SELECTOR, "input[type='radio']")
+                        label = li.find_element(By.CSS_SELECTOR, "label .select-text")
+                        label_text = label.text.strip()
+                        options.append({"element": inp, "text": label_text, "type": "radio"})
+                    except Exception:
+                        pass
+                if not options:
+                    print(f"{Fore.RED}[Yaklass] No multiple choice options found!")
                     stats["questions_failed"] += 1
                     return
-            except Exception as e:
-                print(f"{Fore.RED}[!] Failed to type answer: {str(e)[:60]}")
-                stats["questions_failed"] += 1
-                return
-        
-        # Step 5: Submit the answer
+                print(f"{Fore.CYAN}[*] Сонголтууд:")
+                for idx, opt in enumerate(options):
+                    print(f"  {idx+1}. {opt['text']}")
+                print(f"{Fore.GREEN}[Yaklass] Хамгийн сайн таарсан сонголт: {Fore.YELLOW}{ai_answer}")
+                match = match_answer_to_option(ai_answer, options)
+                if match:
+                    print(f"{Fore.GREEN}[Yaklass] Сонгож байна: {match['option']['text']}")
+                    select_answer_option(match)
+                else:
+                    print(f"{Fore.RED}[Yaklass] No matching option found for answer: {ai_answer}")
+                    stats["questions_failed"] += 1
+                    return
         print(f"{Fore.CYAN}[*] Submitting answer...")
         time.sleep(PAGE_LOAD_DELAY)
-        submit_button = find_submit_button()
-        
+        submit_button = retry(lambda: find_submit_button(), err_msg="[!] Submit button not found")
         if submit_button:
-            submit_button.click()
+            retry(lambda: submit_button.click(), err_msg="[!] Could not click submit button")
             print(f"{Fore.GREEN}[✓] Submitted!")
             time.sleep(SUBMIT_WAIT_TIME)
-            
-            # Log success
             try:
                 now = datetime.now()
                 elapsed = time.time() - question_start_time
@@ -1780,24 +2007,20 @@ def solve_task():
                         'time_taken': round(elapsed, 2),
                         'timestamp': now.isoformat()
                     }, f, ensure_ascii=False, indent=2)
-            except:
-                pass
+            except Exception as log_err:
+                print(f"{Fore.YELLOW}[!] Logging failed: {str(log_err)[:60]}")
         else:
             print(f"{Fore.YELLOW}[!] Submit button not found")
             stats["questions_failed"] += 1
             return
-        
-        # Step 6: Move to next question or finish
         print(f"{Fore.CYAN}[*] Looking for next question...")
         time.sleep(NAVIGATION_WAIT_TIME)
-        next_button = find_next_button()
-        
+        next_button = retry(lambda: find_next_button(), err_msg="[!] Next button not found", retries=2)
         if next_button:
             print(f"{Fore.YELLOW}[→] Moving to next question...")
             time.sleep(NAVIGATION_WAIT_TIME)
-            next_button.click()
+            retry(lambda: next_button.click(), err_msg="[!] Could not click next button")
             time.sleep(NEXT_PAGE_WAIT_TIME)
-            # RECURSIVE: Automatically solve next question
             solve_task()
         else:
             elapsed = time.time() - stats["start_time"]
@@ -1808,7 +2031,6 @@ def solve_task():
             print(f"{Fore.CYAN}    Total Failed: {stats['questions_failed']}")
             print(f"{Fore.CYAN}    Time Elapsed: {int(elapsed)}s")
             print(f"{Fore.GREEN}{'='*60}\n")
-    
     except Exception as e:
         error_log.append(f"Solve error: {str(e)[:MAX_ERROR_MSG_LENGTH]}")
         print(f"{Fore.RED}[!] Unexpected error: {str(e)[:80]}")
@@ -1843,10 +2065,13 @@ print(f"{Fore.MAGENTA}   ✓ Yaklass & Google Forms Support")
 print(f"{Fore.MAGENTA}   ✓ Multi-AI Analysis (Perplexity + Groq)")
 print(f"{Fore.MAGENTA}   ✓ Smart Answer Detection (Text/Select)")
 print(f"{Fore.MAGENTA}   ✓ Auto-Submit & Auto-Navigate")
+print(f"{Fore.MAGENTA}   ✓ Type Verification & Interactive Mode")
 print(f"{Fore.MAGENTA}   Press {HOTKEY} to start solving!")
+print(f"{Fore.MAGENTA}   Press Ctrl+D to run diagnostics!")
+print(f"{Fore.MAGENTA}   Press Ctrl+E to identify elements!")
 print(f"{Fore.MAGENTA}=============================================\n")
-print(f"{Fore.CYAN}Creator: Buyndelger (caelith) — 16 years old, Mongolia")
-print(f"{Fore.CYAN}Repo: created-by-caelith")
+print(f"{Fore.CYAN}Creator: Buyndelger (Dye)")
+print(f"{Fore.CYAN}Repo: created-by-Dye")
 
 # Discover all working models on startup
 print(f"\n{Fore.MAGENTA}[*] Initializing bot...")
@@ -1860,6 +2085,8 @@ print(f"{Fore.GREEN}[+] Bot is ready to solve!")
 print(f"{Fore.CYAN}[*] Press F8 on any question (Yaklass or Google Forms)")
 print(f"{Fore.CYAN}[*] Bot auto-detects platform and answer type (text/multiple choice)")
 print(f"{Fore.CYAN}[*] Bot will automatically loop through all questions")
+print(f"{Fore.CYAN}[*] Type verification helps catch auto-detection errors")
+print(f"{Fore.CYAN}[*] Interactive mode lets you click to identify elements")
 print(f"{Fore.GREEN}{'='*50}\n")
 
 def cleanup():
@@ -1876,6 +2103,8 @@ import atexit
 atexit.register(cleanup)
 
 keyboard.add_hotkey(HOTKEY, solve_task)
+keyboard.add_hotkey("ctrl+d", run_diagnostics)
+keyboard.add_hotkey("ctrl+e", interactive_element_selector)
 
 try:
     keyboard.wait()
