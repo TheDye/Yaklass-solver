@@ -42,7 +42,7 @@ This bot is designed to help with online tests. Instead of relying on a single A
 - **Python 3.10+**
 - **Google Chrome debugger edition**
 
-- you need to create "".env"" file and type there:
+- you need to create **.env** file and type there:
   ```bash
   PERPLEXITY_API_KEY= your-api-key
   GROQ_API_KEY=your-api-key
